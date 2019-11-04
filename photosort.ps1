@@ -9,6 +9,9 @@
     the files to a newly created directory structure based on the YEAR\MONTH\DAY of
     the file's creation date. The script also has the option of splitting out image
     files from video files and placing each in its own YEAR\MONTH\DAY directory scructure.
+
+    Run with the following to redirect all system output to a log file:
+    3>&1 2>&1 > redirection.log
 .NOTES
     File Name      : photosort.ps1
     Author         : Warren S. Taylor (ws.taylor@gmail.com)
@@ -49,13 +52,10 @@
 function VidGetExifDateTaken($Filename) 
 {
     $file = Get-Item $Filename
-    $fileExt = "*" + $file.Extension
     $retDate = $null
 
     $shell = New-Object -ComObject "Shell.Application"
     $fileDir = $shell.NameSpace($file.DirectoryName)
-#see if I can make this less general--right now it grabs all files with the same extension and then that causes issues in teh key/val section
-# $Vid = ( $fileDir.Items() | Where-Object { $_.path -like $fileExt } )
     $Vid = ( $fileDir.Items() | Where-Object { $_.path -like $Filename } )
 
     # this is the index that you want from the video metadata array. Some other values of note are:
@@ -64,9 +64,10 @@ function VidGetExifDateTaken($Filename)
     # 208 = Media created
     $item = 208
 
-    If($fileDir.GetDetailsOf($Filename, $item)) #To avoid empty values
+    # If($fileDir.GetDetailsOf($Filename, $item)) #To avoid empty values
+    If($fileDir.GetDetailsOf($Vid, $item)) #To avoid empty values
     {
-        $objkey = $fileDir.GetDetailsOf($Filename, $item)
+        # $objkey = $fileDir.GetDetailsOf($Filename, $item)
         $objval = $fileDir.GetDetailsOf($Vid, $item)
 
         # This regex sanitizes the date returned from the COM object.
@@ -85,36 +86,49 @@ function VidGetExifDateTaken($Filename)
 
     return $retDate
 }
+
 #---------------------------------------------------------------------------------------------
 #---------------------------------------------------------------------------------------------
-function GetTakenData($image) 
-{
-    try 
-    {
-		return $image.GetPropertyItem(36867).Value
-	}	
-    catch 
-    {
-		return $null
-	}
-}
+<#
+    .SYNOPSIS
+    Get the Date Modified metadata from an image file.
+
+    .DESCRIPTION
+    Get the Date Modified metadata from an image file. 
+    Supports Jpeg, HEIC, and any other file that supports EXIF data.
+
+    .PARAMETER image
+    Pass in the fully pathed filename of the image file
+
+    .EXAMPLE 
+    GetExifDateTaken C:\files\MyImage.jpg
+
+    .NOTES
+    It appears to work fine for Jpeg and HEIC files from a variety of phones and cameras.
+    A nice reference for EXIF property item values is here:
+    https://nicholasarmstrong.com/2010/02/exif-quick-reference/
+#>
 function GetExifDateTaken($Filename) 
 {
     $FileDetail = New-Object -TypeName System.Drawing.Bitmap -ArgumentList $Filename 
-    # $FileDetail.Dispose()
-    try{
-        $takenData = GetTakenData($FileDetail)
-
-        if ($null -eq $takenData) 
+    
+    try
+    {
+        # $takenData = GetTakenData($FileDetail)
+        if( $takenData = $FileDetail.GetPropertyItem(36867).Value )
         {
-            return $null
-        }
-        else
-        {        
             $takenValue = [System.Text.Encoding]::Default.GetString($takenData, 0, $takenData.Length - 1)
             $taken = [DateTime]::ParseExact($takenValue, 'yyyy:MM:dd HH:mm:ss', $null)
             return $taken
         }
+        else 
+        {
+            return $null
+        }
+    }
+    catch
+    {
+        return $null
     }
     finally
     {
@@ -122,11 +136,36 @@ function GetExifDateTaken($Filename)
     }
 }
 
+#---------------------------------------------------------------------------------------------
+#---------------------------------------------------------------------------------------------
+<#
+    .SYNOPSIS
+    Write a comment out to an established log file.
+
+    .DESCRIPTION
+    Write a comment out to an established log file.
+    The log file is represented by the global $logfile variable
+    
+    .PARAMETER comment
+    String variable passed in to be written to the log file.
+
+    .EXAMPLE 
+    WriteLog "This file has been written: $filename"
+
+    .NOTES
+    This is really hacky, and I'd like to make it more portable and/or useable. 
+    For now I just want to be able to write to the logfile with a minimum of typing.
+#>
 function WriteLog($comment)
 {
     Add-Content -Path $logFile -Value $comment #-PassThru
 }
 
+#---------------------------------------------------------------------------------------------
+#---------------------------------------------------------------------------------------------
+#                                       M   A   I   N
+#---------------------------------------------------------------------------------------------
+#---------------------------------------------------------------------------------------------
 
 $srcDir = Join-Path $PSScriptRoot "\Source"
 $destDir = Join-Path $PSScriptRoot "\Destination"
@@ -134,11 +173,14 @@ $photoDir = Join-Path $destDir "\Photos"
 $vidDir = Join-Path $destDir "\HomeMovies"
 $logDir = Join-Path $PSScriptRoot "\Logs"
 
-### Redirect all systemn output to a log file
-# 3>&1 2>&1 > ($logDir + "redirection.log")
-
 $dt = Get-Date -Format "FileDate"
 $logFile = Join-Path $logDir ( ("\logfile", $dt, ".txt") -join '' ) 
+
+if( (Test-Path $logDir) -eq $false ) 
+{ 
+    mkdir $logDir
+    WriteLog -comment "Created $logDir"
+}
 
 WriteLog -comment (Get-Date -Format o)
 WriteLog -comment "Begin processing..."
@@ -147,8 +189,6 @@ if( (Test-Path $destDir) -eq $false )
 { 
     WriteLog -comment "Creating $destDir"
     mkdir $destDir
-    mkdir $photoDir
-    mkdir $vidDir
 }
 
 if( (Test-Path $photoDir) -eq $false ) 
@@ -163,11 +203,8 @@ if( (Test-Path $vidDir) -eq $false )
     mkdir $vidDir
 }
 
-# $metadata = Get-FileMetaData -folder (Get-childitem $srcDir -Recurse -Directory).FullName
-# $res = Select-Object -InputObject $metadata -Property f-stop, path
-# ForEach($File in ( $metadata | Select-Object path))
-
 $MyFiles = get-childitem -path $srcDir\* -Recurse -include *.png, *.jpeg, *.gif, *.jpg, *.psd, *.bmp, *.heic, *.mov, *.mp4
+
 ForEach($File in $MyFiles)
 {
     # reset the destination directory each loop
@@ -217,19 +254,37 @@ ForEach($File in $MyFiles)
         if($srcHash.Hash -ne $destHash.Hash)
         {
             # Files are not the same, but have the same name
-            # Rename file and save to directory
-            $newFileName = ($File.BaseName, $destHash.Hash, $File.Extension )  -join '_'
-            $destFilePath = Join-Path $destPath $newFileName
+            # Create "Dupes" directory in existing directory and save file there
+            $destDirPath = Join-Path $destPath "Dupes" 
 
-            # If file with hashed name already exists, don't copy it over
-            if( (Test-Path $destFilePath) -eq $false ) 
-            {
-                copy-item $srcFile  $destFile 
-
-                $comment = "Copying $File to $destFilePath"
-                write-host $comment -ForegroundColor Green 
-                WriteLog -comment $comment
+            if( (Test-Path $destDirPath) -eq $false ) 
+            { 
+                mkdir $destDirPath 
             }
+
+            $destFilePath = Join-Path $destDirPath $File.Name
+
+            # If file already exists in Dupes, increment name
+            if( (Test-Path $destFilePath) -eq $true ) 
+            {
+                $comment = $File.Name + " exists in */Dupes, renaming file."
+                write-host $comment -ForegroundColor Cyan 
+                WriteLog -comment $comment
+
+                $namecount = 1
+                while( (Test-Path $destFilePath) -eq $true )
+                {
+                    $newFileName = ($File.BaseName, $namecount, $File.Extension )  -join '_'
+                    $destFilePath = Join-Path $destDirPath $newFileName
+                    $namecount++
+                }
+            }
+            
+            copy-item $File $destFilePath
+
+            $comment = "Copying " + $File.BaseName + " to $destFilePath"
+            write-host $comment -ForegroundColor Green 
+            WriteLog -comment $comment
         }
         else 
         {
