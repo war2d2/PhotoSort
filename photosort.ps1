@@ -12,6 +12,9 @@
 
     Run with the following to redirect all system output to a log file:
     3>&1 2>&1 > redirection.log
+
+    If the script won't run on your PC, you may need to change your execution policy:
+    https://docs.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_execution_policies?view=powershell-6
 .NOTES
     File Name      : photosort.ps1
     Author         : Warren S. Taylor (ws.taylor@gmail.com)
@@ -19,7 +22,7 @@
     Copyright 2018 - Warren S. Taylor
 .LINK
     Script posted over:
-    http://war2d2.com
+    https://github.com/war2d2/PhotoSort
 .EXAMPLE
     Example 1
 .EXAMPLE
@@ -128,6 +131,7 @@ function GetExifDateTaken($Filename)
     }
     catch
     {
+        WriteLog -comment "Error while getting ExifDateTaken($Filename): $_" 
         return $null
     }
     finally
@@ -211,11 +215,13 @@ ForEach($File in $MyFiles)
     if( ($File.Extension).toupper() -EQ ".MOV" -or ($File.Extension).toupper() -EQ ".MP4")
     {
         $destPath = $vidDir # reset the destination directory each loop; set to Video
+        $dupePath = Join-Path $destPath "Dupes"
         $dateVar = VidGetExifDateTaken -Filename $File.FullName
     }
     else 
     {
         $destPath = $photoDir # reset the destination directory each loop; set to Photo
+        $dupePath = Join-Path $destPath "Dupes"
         $dateVar = GetExifDateTaken -Filename $File.FullName
     }
     
@@ -233,10 +239,15 @@ ForEach($File in $MyFiles)
         $fDay = "{0:00}" -f $File.LastWriteTime.Day
     }
 
+    # Create destination; if it doesn't exist, there's no possibility
+    # of a duplicate. If it does exist, there is a possibility, so make 
+    # the dupe directory also.
     $destPath = ($destPath, $fYear, $fMonth, $fDay) -join '\'
+    $dupePath = ($dupePath, $fYear, $fMonth, $fDay) -join '\'
+
     if( (Test-Path $destPath) -eq $false ) 
     { 
-        mkdir $destPath #| out-null 
+        mkdir $destPath 
     }
 
     # Get the full path of the destination + filename 
@@ -245,24 +256,30 @@ ForEach($File in $MyFiles)
     # Test to see if the file already exists in the destination directory
     if( (Test-Path $destFilePath) -eq $true ) 
     { 
+        $comment = $File.Name + " already exists in " + $destPath
+        write-host $comment -ForegroundColor Green 
+        WriteLog -comment $comment
+
         #use Get-FileHash to compare $File with $fYear\$fMonth\$fDay\$File
         $srcHash = Get-FileHash $File.FullName 
 
-        # $destFile = ($destDir, $fYear, $fMonth, $fDay, $File.Name) -join '\'
         $destHash = Get-FileHash $destFilePath
 
         if($srcHash.Hash -ne $destHash.Hash)
         {
+            $comment = $File.Name + " hash does not match hash from " + $destFilePath
+            write-host $comment -ForegroundColor Green 
+            WriteLog -comment $comment
+
             # Files are not the same, but have the same name
             # Create "Dupes" directory in existing directory and save file there
-            $destDirPath = Join-Path $destPath "Dupes" 
 
-            if( (Test-Path $destDirPath) -eq $false ) 
-            { 
-                mkdir $destDirPath 
+            if( (Test-Path $dupePath) -eq $false )
+            {
+                mkdir $dupePath 
             }
 
-            $destFilePath = Join-Path $destDirPath $File.Name
+            $destFilePath = Join-Path $dupePath $File.Name
 
             # If file already exists in Dupes, increment name
             if( (Test-Path $destFilePath) -eq $true ) 
@@ -274,13 +291,14 @@ ForEach($File in $MyFiles)
                 $namecount = 1
                 while( (Test-Path $destFilePath) -eq $true )
                 {
-                    $newFileName = ($File.BaseName, $namecount, $File.Extension )  -join '_'
-                    $destFilePath = Join-Path $destDirPath $newFileName
+                    $newFileName = ($File.BaseName, '_', $namecount, $File.Extension )  -join ''
+                    $destFilePath = Join-Path $dupePath $newFileName
                     $namecount++
                 }
             }
             
-            copy-item $File $destFilePath
+            # copy-item $File $destFilePath
+            move-item $File $destFilePath
 
             $comment = "Copying " + $File.BaseName + " to $destFilePath"
             write-host $comment -ForegroundColor Green 
@@ -296,9 +314,8 @@ ForEach($File in $MyFiles)
     }
     else 
     {
-        # If file doesn't exist, create the path and save the file
-        # use New-Item to create path:
-        # New-Item -ItemType Directory -Force -Path C:\Path\That\May\Or\May\Not\Exist
-        copy-item $File $destPath
+        # If file doesn't exist in destination, copy the file
+        # copy-item $File $destPath
+        Move-Item $File $destPath
     }
 } #end ForEach
